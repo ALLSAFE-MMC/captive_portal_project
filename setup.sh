@@ -6,42 +6,38 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# Paket yöneticisini güncelle ve gerekli paketleri yükle
 echo "Paket yöneticisini güncelliyoruz ve gerekli paketleri yüklüyoruz..."
 pkg update
-pkg upgrade -y
-pkg install -y sudo nano gcc git nginx postgresql13-server postgresql13-client php81 php81-fpm
+pkg install -y gcc git nginx postgresql13-server postgresql13-client php83 php83-pgsql php83-extensions
 
+# Ağ arayüzünü sabitle
 echo "Ağ arayüzünü sabitliyoruz..."
-sysrc ifconfig_em0="inet 192.168.1.100 netmask 255.255.255.0"
-sysrc defaultrouter="192.168.1.1"
+sysrc ifconfig_em0="inet 172.16.16.18 netmask 255.255.255.0"
+sysrc defaultrouter="172.16.16.1"
 
+# SSH servisini etkinleştir ve başlat
 echo "SSH servisini etkinleştiriyoruz..."
 sysrc sshd_enable="YES"
 service sshd start
 
+# PostgreSQL kullanıcısını oluştur
 echo "PostgreSQL kullanıcısını oluşturuyoruz..."
-if ! id "postgres" >/dev/null 2>&1; then
-    pw user add postgres -c "PostgreSQL User" -d /home/postgres -s /bin/sh
-    mkdir -p /home/postgres
-    chown postgres:postgres /home/postgres
-fi
+pw user add postgres -c "PostgreSQL User" -u 999 -d /home/postgres -s /bin/sh -w yes
 
+# PostgreSQL servisini etkinleştir ve başlat
 echo "PostgreSQL servisini etkinleştiriyoruz..."
 sysrc postgresql_enable="YES"
-if [ ! -d "/var/db/postgres/data13" ]; then
-    service postgresql initdb
-fi
+service postgresql initdb
 service postgresql start
 
+# PostgreSQL yapılandırması
 echo "PostgreSQL yapılandırması yapılıyor..."
-su - postgres -c "psql -c \"SELECT 1 FROM pg_roles WHERE rolname='freebsd'\"" | grep -q 1 || su - postgres -c "createuser freebsd --interactive <<EOF
-y
-EOF"
-su - postgres -c "psql -c \"SELECT 1 FROM pg_database WHERE datname='captive_portal'\"" | grep -q 1 || su - postgres -c "createdb captive_portal -O freebsd"
-su - postgres -c "psql captive_portal -c \"ALTER USER freebsd WITH PASSWORD '123456';\""
+sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD '123456';"
+sudo -u postgres createdb captive_portal -O postgres
 
+# Nginx yapılandırması
 echo "Nginx yapılandırması yapılıyor..."
-mkdir -p /usr/local/etc/nginx
 cat <<EOF > /usr/local/etc/nginx/nginx.conf
 worker_processes  1;
 
@@ -73,21 +69,26 @@ EOF
 sysrc nginx_enable="YES"
 service nginx start
 
-echo "PHP-FPM servisini başlatıyoruz..."
+# PHP-FPM servisini başlat
+echo "PHP-FPM yapılandırması yapılıyor..."
 sysrc php_fpm_enable="YES"
 service php-fpm start
 
+# pf yapılandırması
 echo "pf yapılandırması yapılıyor..."
 cat <<EOF > /etc/pf.conf
 ext_if = "em0"
-captive_portal_ip = "192.168.1.100"
+captive_portal_ip = "172.16.16.18"
 
+# Tüm DNS trafiğini captive portal sunucusuna yönlendir
 rdr pass on \$ext_if proto udp from any to any port 53 -> \$captive_portal_ip port 53
 rdr pass on \$ext_if proto tcp from any to any port 53 -> \$captive_portal_ip port 53
 
+# Tüm HTTP ve HTTPS trafiğini captive portal sunucusuna yönlendir
 rdr pass on \$ext_if proto tcp from any to any port 80 -> \$captive_portal_ip port 80
 rdr pass on \$ext_if proto tcp from any to any port 443 -> \$captive_portal_ip port 443
 
+# Captive portal sunucusuna izin ver
 pass in on \$ext_if proto tcp from any to \$captive_portal_ip port 80
 pass in on \$ext_if proto tcp from any to \$captive_portal_ip port 443
 pass in on \$ext_if proto udp from any to \$captive_portal_ip port 53
@@ -99,25 +100,29 @@ EOF
 sysrc pf_enable="YES"
 service pf start
 
+# Kullanıcı oluşturma ve şifre ayarlama
 echo "freebsd kullanıcısının şifresini ayarlıyoruz..."
-echo "freebsd:123456" | pw usermod freebsd -h 0
+echo "freebsd:123456" | chpasswd
 
+# DNS ayarlarını yapılandır
 echo "DNS ayarları yapılandırılıyor..."
 cat <<EOF > /etc/resolv.conf
 nameserver 8.8.8.8
 nameserver 8.8.4.4
 EOF
 
+# Servis durumlarını kontrol et ve ekrana yazdır
 echo "Servis durumları:"
-service sshd status
-service postgresql status
-service nginx status
-service php-fpm status
-service pf status
+echo "SSH: $(service sshd status)"
+echo "PostgreSQL: $(pg_ctl status)"
+echo "Nginx: $(service nginx status)"
+echo "PHP-FPM: $(service php-fpm status)"
+echo "PF: $(pfctl -s info)"
 
+# Kullanıcı bilgilerini ekrana yazdır
 echo "Kullanıcı Bilgileri:"
 echo "freebsd kullanıcısı şifresi: 123456"
-echo "PostgreSQL kullanıcı adı: freebsd"
+echo "PostgreSQL kullanıcı adı: postgres"
 echo "PostgreSQL veritabanı adı: captive_portal"
 echo "PostgreSQL şifresi: 123456"
 
