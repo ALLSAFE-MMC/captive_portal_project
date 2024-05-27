@@ -1,43 +1,43 @@
 #!/bin/sh
 
-# Kök kullanıcı olup olmadığını kontrol et
-if [ "$(id -u)" -ne 0 ]; then
-    echo "Bu script'i çalıştırmak için root kullanıcısı olmanız gerekmektedir."
-    exit 1
-fi
-
-# Paket yöneticisini güncelle ve gerekli paketleri yükle
+# Paket yöneticisini güncelliyoruz ve gerekli paketleri yüklüyoruz
 echo "Paket yöneticisini güncelliyoruz ve gerekli paketleri yüklüyoruz..."
 pkg update
-pkg install -y gcc git nginx postgresql13-server postgresql13-client php83
+pkg upgrade -y
+pkg install -y nginx postgresql13-server postgresql13-client php83 php83-fpm php83-pgsql
 
-# Ağ arayüzünü sabitle
+# Ağ arayüzünü sabitliyoruz
 echo "Ağ arayüzünü sabitliyoruz..."
 sysrc ifconfig_le0="inet 172.16.16.18 netmask 255.255.255.0"
 sysrc defaultrouter="172.16.16.1"
+ifconfig le0 inet 172.16.16.18 netmask 255.255.255.0
+route add default 172.16.16.1
 
-# SSH servisini etkinleştir ve başlat
+# SSH servisini etkinleştiriyoruz
 echo "SSH servisini etkinleştiriyoruz..."
-sysrc sshd_enable="YES"
+sysrc sshd_enable=YES
 service sshd start
 
-# PostgreSQL kullanıcısını oluştur
+# PostgreSQL kullanıcısını oluşturuyoruz
 echo "PostgreSQL kullanıcısını oluşturuyoruz..."
-pw user add postgres -c "PostgreSQL User" -u 999 -d /home/postgres -s /bin/sh -w yes
+pw useradd -n postgres -s /bin/sh -m -d /home/postgres -w yes || true
 
-# PostgreSQL servisini etkinleştir ve başlat
+# PostgreSQL servisini etkinleştiriyoruz
 echo "PostgreSQL servisini etkinleştiriyoruz..."
-sysrc postgresql_enable="YES"
+sysrc postgresql_enable=YES
 service postgresql initdb
 service postgresql start
 
-# PostgreSQL yapılandırması
+# PostgreSQL yapılandırması yapılıyor
 echo "PostgreSQL yapılandırması yapılıyor..."
-su - postgres -c "psql -c \"ALTER USER postgres WITH PASSWORD '123456';\""
-su - postgres -c "createdb captive_portal -O postgres"
+su - postgres -c 'createuser -s freebsd'
+su - postgres -c 'createdb captive_portal'
+su - postgres -c 'psql -c "ALTER USER freebsd WITH ENCRYPTED PASSWORD '\''123456'\'';"'
 
-# Nginx yapılandırması
+# Nginx yapılandırması yapılıyor
 echo "Nginx yapılandırması yapılıyor..."
+sysrc nginx_enable=YES
+
 cat <<EOF > /usr/local/etc/nginx/nginx.conf
 worker_processes  1;
 
@@ -53,47 +53,59 @@ http {
 
     server {
         listen 80;
-        server_name _;
+        server_name 172.16.16.18;
+
+        root /captive_portal_project/src/web_server;
+        index index.php index.html;
 
         location / {
-            proxy_pass http://127.0.0.1:9000;  # PHP-FPM'in dinlediği adres
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
+            try_files \$uri \$uri/ /index.php?\$query_string;
+        }
+
+        location ~ \.php$ {
+            include fastcgi_params;
+            fastcgi_pass 127.0.0.1:9000;
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         }
     }
 }
 EOF
 
-sysrc nginx_enable="YES"
-service nginx start
+service nginx restart
 
-# PHP-FPM yapılandırması
+# PHP-FPM yapılandırması yapılıyor
 echo "PHP-FPM yapılandırması yapılıyor..."
-sysrc php_fpm_enable="YES"
+sysrc php_fpm_enable=YES
 service php-fpm start
 
-# PF yapılandırması
+# pf yapılandırması yapılıyor
 echo "pf yapılandırması yapılıyor..."
-sysrc pf_enable="YES"
+sysrc pf_enable=YES
 service pf start
 
-# freebsd kullanıcısının şifresini ayarla
+# freebsd kullanıcısının şifresini ayarlıyoruz
 echo "freebsd kullanıcısının şifresini ayarlıyoruz..."
-echo "freebsd:123456" | pw usermod freebsd -h 0
+echo "freebsd:123456" | chpasswd
 
-# Servis durumlarını kontrol et ve ekrana yazdır
+# DNS ayarları yapılandırılıyor
+echo "DNS ayarları yapılandırılıyor..."
+echo 'nameserver 8.8.8.8' > /etc/resolv.conf
+echo 'nameserver 8.8.4.4' >> /etc/resolv.conf
+
+# Servis durumlarını kontrol ediyoruz
 echo "Servis durumları:"
-echo "SSH: $(service sshd status)"
-echo "PostgreSQL: $(service postgresql status)"
-echo "Nginx: $(service nginx status)"
-echo "PHP-FPM: $(service php-fpm status)"
-echo "PF: $(service pf status)"
+echo "SSH:" $(service sshd status)
+echo "PostgreSQL:" $(service postgresql status)
+echo "Nginx:" $(service nginx status)
+echo "PHP-FPM:" $(service php-fpm status)
+echo "PF:" $(service pf status)
 
+# Kullanıcı bilgilerini ekrana yazdırıyoruz
 echo "Kullanıcı Bilgileri:"
 echo "freebsd kullanıcısı şifresi: 123456"
 echo "PostgreSQL kullanıcı adı: postgres"
 echo "PostgreSQL veritabanı adı: captive_portal"
 echo "PostgreSQL şifresi: 123456"
+
 echo "Kurulum ve yapılandırma tamamlandı."
