@@ -8,3 +8,4 @@ This project implements a captive portal system with an authentication server, w
 - Web server with login functionality
 - Firewall configuration
 - Database integration
+test
