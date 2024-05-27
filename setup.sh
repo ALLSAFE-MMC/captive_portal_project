@@ -9,11 +9,11 @@ fi
 # Paket yöneticisini güncelle ve gerekli paketleri yükle
 echo "Paket yöneticisini güncelliyoruz ve gerekli paketleri yüklüyoruz..."
 pkg update
-pkg install -y gcc git nginx postgresql13-server postgresql13-client php83 php83-fpm php83-extensions
+pkg install -y gcc git nginx postgresql13-server postgresql13-client php83
 
 # Ağ arayüzünü sabitle
 echo "Ağ arayüzünü sabitliyoruz..."
-sysrc ifconfig_em0="inet 172.16.16.18 netmask 255.255.255.0"
+sysrc ifconfig_le0="inet 172.16.16.18 netmask 255.255.255.0"
 sysrc defaultrouter="172.16.16.1"
 
 # SSH servisini etkinleştir ve başlat
